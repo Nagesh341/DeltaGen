@@ -1,5 +1,5 @@
 from google.adk.agents.llm_agent import Agent
-from .Utils import untar_zip_files, validate_target_folders_with_partition, generate_config_xml, list_config_files, generate_delta
+from .Utils import untar_zip_files, validate_target_folders_with_partition, generate_config_xml, list_config_files, parse_config_xml, generate_delta
 
 redbend_tool = Agent(
     model='gemini-2.5-flash',
@@ -27,6 +27,10 @@ Your task:
 9. When user confirms to generate delta:
    - Use list_config_files tool to find all config XML files in current directory
    - Ask user which config file(s) to use for delta generation
+   - If user says "all config files" or "all":
+     * Use all the config files found by list_config_files
+   - Otherwise, use the specific config file names provided by the user
+   - For reference, you can use parse_config_xml tool to show partition names in a config file if needed
    - Use generate_delta tool with the selected config file names
    - The tool will validate that vRapidMobileCMD-Linux.exe exists and prepare commands
    - Execute the Redbend commands using run_in_terminal for each config file
@@ -41,8 +45,9 @@ Available tools:
 - validate_target_folders_with_partition: Validates target and source folder structure against partition file sheets
 - generate_config_xml: Generates config.xml based on partition file data. Use partition_sheet parameter to specify which sheet to process when multiple sheets exist
 - list_config_files: Lists all config XML files in current directory
+- parse_config_xml: Extracts all partition names from a config XML file. Returns comma-separated partition names
 - generate_delta: Validates Redbend executable and prepares delta generation for specified config files
 
 Return a confirmation message that Redbend delta generation was initiated with the extracted paths and ECU type.''',
-    tools=[untar_zip_files, validate_target_folders_with_partition, generate_config_xml, list_config_files, generate_delta],
+    tools=[untar_zip_files, validate_target_folders_with_partition, generate_config_xml, list_config_files, parse_config_xml, generate_delta],
 )
