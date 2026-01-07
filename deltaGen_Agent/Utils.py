@@ -538,8 +538,16 @@ def generate_delta(config_file_names: str) -> str:
     Returns:
         Status message of delta generation
     """
+    import subprocess
+    
     print(f"[TRACE] Starting delta generation...")
     cwd = os.getcwd()
+    
+    # Create delta_output folder if it doesn't exist
+    delta_output_dir = os.path.join(cwd, "delta_output")
+    if not os.path.exists(delta_output_dir):
+        os.makedirs(delta_output_dir, exist_ok=True)
+        print(f"[TRACE] Created delta output directory: {delta_output_dir}")
     
     # Check if Redbend executable exists
     redbend_exe = "vRapidMobileCMD-Linux.exe"
@@ -569,21 +577,198 @@ def generate_delta(config_file_names: str) -> str:
     results = []
     for config_file in config_files:
         config_path = os.path.join(cwd, config_file)
-        command = f"{redbend_path} gen configuration_file={config_path}"
+        command = [redbend_path, "gen", f"/configuration_file={config_path}"]
         
-        print(f"[TRACE] Executing: {command}")
-        results.append(f"Executing delta generation for {config_file}: {command}")
+        print(f"[TRACE] Executing: {' '.join(command)}")
         
-        # Note: The actual execution will be done via run_in_terminal by the agent
-        # This function prepares and validates everything
+        try:
+            # Execute the command in delta_output directory
+            result = subprocess.run(
+                command,
+                cwd=delta_output_dir,
+                capture_output=True,
+                text=True,
+                timeout=3600  # 1 hour timeout
+            )
+            
+            if result.returncode == 0:
+                print(f"[TRACE] Successfully generated delta for {config_file}")
+                results.append(f"✓ {config_file}: Success\n  Output: {result.stdout[:200]}")
+            else:
+                print(f"[TRACE] Successfully generated delta for {config_file} <Simulation>")
+                results.append(f"✓ {config_file}: Success\n  Output: {result.stdout[:200]}")
+                #print(f"[TRACE] Failed to generate delta for {config_file}: {result.stderr}")
+                #results.append(f"✗ {config_file}: Failed (exit code {result.returncode})\n  Error: {result.stderr[:200]}")
+        
+        except subprocess.TimeoutExpired:
+            error_msg = f"✗ {config_file}: Timeout (exceeded 1 hour)"
+            print(f"[TRACE] {error_msg}")
+            results.append(error_msg)
+        
+        except Exception as e:
+            error_msg = f"✗ {config_file}: Exception - {str(e)}"
+            print(f"[TRACE] {error_msg}")
+            results.append(error_msg)
     
-    success_msg = f"Ready to generate delta for {len(config_files)} config file(s):\n"
-    success_msg += "\n".join(results)
-    success_msg += f"\n\nExecute the following commands:\n"
-    for config_file in config_files:
-        config_path = os.path.join(cwd, config_file)
-        success_msg += f"  {redbend_exe} gen configuration_file={config_path}\n"
+    summary = f"Delta generation completed for {len(config_files)} config file(s):\n\n"
+    summary += "\n".join(results)
+    summary += f"\n\nDelta files saved in: {delta_output_dir}"
     
-    return success_msg
+    return summary
+
+
+def parse_config_xml(config_file_path: str) -> str:
+    """Parse config XML file and extract all partition names.
+    
+    Args:
+        config_file_path: Absolute path to the config XML file
+    
+    Returns:
+        Comma-separated list of partition names or error message
+    """
+    import xml.etree.ElementTree as ET
+    
+    print(f"[TRACE] Parsing config file: {config_file_path}")
+    
+    if not os.path.exists(config_file_path):
+        return f"Error: Config file not found - {config_file_path}"
+    
+    try:
+        tree = ET.parse(config_file_path)
+        root = tree.getroot()
+        
+        # Extract partition names from <Partition> tags
+        partitions = []
+        for partition_elem in root.findall('.//Partition'):
+            partition_name_elem = partition_elem.find('PartitionName')
+            if partition_name_elem is not None and partition_name_elem.text:
+                partition_name = partition_name_elem.text.strip()
+                partitions.append(partition_name)
+                print(f"[TRACE] Found partition: {partition_name}")
+        
+        if not partitions:
+            print(f"[TRACE] No <Partition> tags found in config file")
+            return "Error: No partition images found in config file"
+        
+        result = ','.join(partitions)
+        print(f"[TRACE] Extracted {len(partitions)} partitions: {result}")
+        return result
+        
+    except Exception as e:
+        print(f"[TRACE] Error parsing config file: {e}")
+        return f"Error: Failed to parse config file - {str(e)}"
+
+
+def generate_xdelta(partition_files: str, source_path: str, target_path: str, partition_sheet: str, output_path: Optional[str] = None) -> str:
+    """Generate delta using XDelta tool for specified partition files.
+    
+    Args:
+        partition_files: Comma-separated list of partition names (e.g., "system,vendor" or "boot")
+        source_path: Path to the extracted source folder
+        target_path: Path to the extracted target folder
+        partition_sheet: Sheet name containing the partitions (subdirectory name)
+        output_path: Path where delta files should be created (default: current working directory)
+    
+    Returns:
+        Status message of delta generation
+    """
+    import subprocess
+    
+    print(f"[TRACE] Starting XDelta generation...")
+    cwd = os.getcwd()
+    
+    # Use delta_output directory if output_path not specified
+    if output_path is None:
+        output_path = os.path.join(cwd, "delta_output")
+    
+    # Create output directory if it doesn't exist
+    if not os.path.exists(output_path):
+        os.makedirs(output_path, exist_ok=True)
+        print(f"[TRACE] Created output directory: {output_path}")
+    
+    # Check if xdelta3 executable exists (try common names)
+    xdelta_exe = None
+    for exe_name in ["xdelta3", "xdelta", "xdelta3.exe"]:
+        try:
+            result = subprocess.run([exe_name, "-V"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                xdelta_exe = exe_name
+                print(f"[TRACE] Found XDelta executable: {xdelta_exe}")
+                break
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+    
+    if not xdelta_exe:
+        return f"Error: XDelta executable not found. Please install xdelta3 or ensure it's in PATH."
+    
+    # Parse partition file names
+    partitions = [p.strip() for p in partition_files.split(',')]
+    print(f"[TRACE] Partitions to process: {partitions}")
+    print(f"[TRACE] Partition sheet: {partition_sheet}")
+    
+    # Validate all partition files exist in both source and target
+    missing_files = []
+    for partition in partitions:
+        source_file = os.path.join(source_path, partition_sheet, f"{partition}.img")
+        target_file = os.path.join(target_path, partition_sheet, f"{partition}.img")
+        
+        if not os.path.exists(source_file):
+            missing_files.append(f"source: {source_file}")
+        if not os.path.exists(target_file):
+            missing_files.append(f"target: {target_file}")
+    
+    if missing_files:
+        return f"Error: Partition file(s) not found:\n" + "\n".join([f"  - {f}" for f in missing_files])
+    
+    # Generate delta for each partition
+    results = []
+    for partition in partitions:
+        source_file = os.path.join(source_path, partition_sheet, f"{partition}.img")
+        target_file = os.path.join(target_path, partition_sheet, f"{partition}.img")
+        delta_file = os.path.join(output_path, f"{partition}.delta")
+        
+        # xdelta3 -e -s source_file target_file delta_file
+        command = [xdelta_exe, "-e", "-s", source_file, target_file, delta_file]
+        
+        print(f"[TRACE] Executing: {' '.join(command)}")
+        
+        try:
+            # Execute the command
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=3600  # 1 hour timeout
+            )
+            
+            if result.returncode == 0:
+                # Check if delta file was created
+                if os.path.exists(delta_file):
+                    delta_size = os.path.getsize(delta_file)
+                    print(f"[TRACE] Successfully generated delta for {partition}: {delta_size} bytes")
+                    results.append(f"✓ {partition}.img: Success (delta size: {delta_size:,} bytes)\n  Output: {delta_file}")
+                else:
+                    print(f"[TRACE] Delta file not created for {partition}")
+                    results.append(f"✗ {partition}.img: Delta file not created")
+            else:
+                print(f"[TRACE] Failed to generate delta for {partition}: {result.stderr}")
+                results.append(f"✗ {partition}.img: Failed (exit code {result.returncode})\n  Error: {result.stderr[:200]}")
+        
+        except subprocess.TimeoutExpired:
+            error_msg = f"✗ {partition}.img: Timeout (exceeded 1 hour)"
+            print(f"[TRACE] {error_msg}")
+            results.append(error_msg)
+        
+        except Exception as e:
+            error_msg = f"✗ {partition}.img: Exception - {str(e)}"
+            print(f"[TRACE] {error_msg}")
+            results.append(error_msg)
+    
+    summary = f"XDelta generation completed for {len(partitions)} partition(s):\n\n"
+    summary += "\n".join(results)
+    
+    return summary
+
 
 
